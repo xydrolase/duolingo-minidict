@@ -1,10 +1,9 @@
 // ==UserScript==
 // @name       Duolingo-MiniDict
-// @namespace  https://github.com/killkeeper/duolingo-minidict
-// @version    0.1
+// @namespace  http://github.com/killkeeper/duolingo-minidict
+// @version    0.11
 // @description  A built-in dictionary for Duolingo
-// @resource css https://brianreavis.github.io/selectize.js/css/selectize.default.css
-// @match      https://www.duolingo.com/*
+// @match      *://www.duolingo.com/*
 // @grant      none
 // ==/UserScript==
 //
@@ -19,14 +18,13 @@
 
 (function($) {
     function DMDict(settings) {
-        this.vocab_list = {};
+        this.vocab_list_model = null;
+        this.vocab_list = null;
         this.el = null;
         this.$el = null;
         this.selectize_api = null;
         
         this.opts = $.extend({
-            update_freq: 3600 * 3, // 3 hours
-            force_update: false,
             datatableify: false,
             max_options: 15,
             sort_by: 'levdist', // levdist, strength, last_practiced
@@ -34,7 +32,7 @@
         
         this.local_storage = (typeof Storage == 'function');
         console.log(this.local_storage);
-        this.data_pending = false;
+        this.data_pending = true;
         this.last_updated = {};
         
         this.duo_apis = {
@@ -96,46 +94,8 @@
         }
         
         this.initialize = function() {
-            /* check languages */
-            this.learning_language = duo.user.get('learning_language');
-            this.from_language = duo.user.get('ui_language');
-            this.dict_lang = this.learning_language + "/" + this.from_language;
-            
-            this.check_vocab_list_updates();
             this.init_dom();
-        }
-        
-        this.check_vocab_list_updates = function() {
-            /* To throttle API requests, the user's words are cached in via
-			 * HTML5's localStorage object. By default the cache is good for 
-			 * 3 hours until the settings suggest another value otherwise. */
-            
-            console.log("local_storage:", this.local_storage);
-            if (this.local_storage) {
-                $.extend(this.last_updated,
-                         JSON.parse(localStorage.getItem('dmdict-last-updated')) || {});
-                var dict_last_updated = this.last_updated[this.dict_lang] || 0;
-                
-                var secs_elapsed = (new Date() - new Date(dict_last_updated)) / 1000;
-                console.log('Dictionary ' + this.dict_lang + ' updated ' + 
-                            secs_elapsed + ' ago.');
-                
-                if (secs_elapsed > this.opts.update_freq || secs_elapsed < 0 || 
-                    this.opts.force_update) {
-                    return this.fetch_vocab_list();
-                }
-                else {
-                    var _cached = localStorage.getItem(
-                        'dmdict-cache-' + this.dict_lang);
-                    if (!_cached) return this.fetch_vocab_list();
-                    
-                    this.vocab_list[this.dict_lang] = JSON.parse(_cached);
-                    console.log(this.vocab_list[this.dict_lang]);
-                }
-            }
-            else {
-                this.fetch_vocab_list();
-            }
+            this.fetch_vocab_list();
         }
         
         this.init_dom = function() {
@@ -186,7 +146,7 @@
             })(this);
             
             $('#select-word').selectize({
-                valueField: 'word_string',
+                valueField: 'id',  // unique id for lexeme
                 labelField: 'word_string',
                 searchField: 'word_string',
                 loadThrottle: 500,
@@ -211,6 +171,27 @@
             });
             
             this.selectize_api = $("#select-word")[0].selectize;
+            
+            var item_add_callback = (function(self) {
+                return function(value, $item) {
+                    var word_model = self.vocab_list_model.get(value);
+                    // create word-modal DOM if not exists
+                    if ($("#word-modal").size() == 0) {
+                        $('<div id="word-modal" class="modal fade hidden"></div>').appendTo('body');
+                    }
+                    if (word_model != undefined) {
+                        var modal_view = new duo.WordModalView({
+                            el: $("#word-modal"),
+                            model: word_model,
+                            parent: null
+                        });
+                        modal_view.render();
+                        $("#word-modal").modal("show");
+                    }
+                }
+            })(this);
+            
+            this.selectize_api.on("item_add", item_add_callback);
             
             $('#duo-minidict').on("click", (function($el, $api) {
                 return function() {
@@ -240,9 +221,7 @@
         }
         
         this.fetch_vocab_list = function() {
-            this.data_pending = true;
-            
-            var vlist = new duo.VocabList;
+            var vlist = new duo.VocabList();
             var callback = (function(self) {
                 return function() {
                     self.parse_vocab_list.call(self, vlist);
@@ -292,11 +271,10 @@
         
         this.query = function(lang, query, callback) {
             /* */
-            console.log("Query:", lang, this.vocab_list[lang], query, callback);
-            if (this.vocab_list[lang] == undefined) return callback();
+            if (this.data_pending || !this.vocab_list) return callback();
             var regex = new RegExp(query.keyword);
             
-            var wl = $.grep(this.vocab_list[lang].words, function(w, i) {
+            var wl = $.grep(this.vocab_list, function(w, i) {
                 return regex.test(w.word_string);
             });
             
@@ -351,37 +329,14 @@
         }
         
         this.parse_vocab_list = function(vlist) {
-            console.log(vlist.toJSON());
-            var flang = vlist.from_language,
-                llang = vlist.learning_language,
-                dlang = llang + '/' + flang,
-                len = vlist.length,
-                words = vlist.toJSON();
+            this.vocab_list = vlist.toJSON();
+            console.log("Vocabulary list loaded: " + this.vocab_list.length + " lexemes loaded.");
             
-            var dict = {
-                from_lang: flang,
-                learn_lang: llang,
-                num_words: len,
-                words: words
-            };
+            this.vocab_list_model = vlist; // this is critical
+            this.learning_language = vlist.learning_language;
+            this.from_language = vlist.from_language;
+            this.dict_lang = [vlist.learning_language, vlist.from_language].join("/");
             
-            this.learning_language = llang;
-            this.from_language = flang;
-            this.dict_lang = dlang;
-            
-            this.vocab_list[dlang] = dict;
-            if (this.local_storage) {
-                localStorage.setItem('dmdict-cache-' + dlang, JSON.stringify(dict));
-                var _l = {};
-                _l[dlang] = new Date();
-                $.extend(this.last_updated, _l);
-                localStorage.setItem('dmdict-last-updated', JSON.stringify(this.last_updated));
-            }
-            
-            console.log("Dictionary cached for language: " + dlang + "; " +
-                        len + "words in dictionary.");
-            
-            //console.log(localStorage.getItem('dmdict-cache-' + dlang));
             this.data_pending = false;
         }
     };
