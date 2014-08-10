@@ -109,7 +109,7 @@
             this.$el = $("#duo-selectize-container");
             this.el = this.$el.get(0);
             
-            $('<link rel="stylesheet" href="https://raw.githubusercontent.com/brianreavis/selectize.js/f293d8b3100db2cc339d4b78ac3c9d0da53d431c/dist/css/selectize.default.css" />').appendTo('head');
+            $('<link rel="stylesheet" href="https://brianreavis.github.io/selectize.js/css/selectize.default.css" />').appendTo('head');
             $('<style type="text/css">' +
               '.popover { overflow: visible !important; width: 512px; position: absolute; }' +
               '.popover-title { margin-left: 5px; }' +
