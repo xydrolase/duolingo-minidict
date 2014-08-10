@@ -3,7 +3,7 @@
 // @namespace  http://github.com/killkeeper/duolingo-minidict
 // @version    0.11
 // @description  A built-in dictionary for Duolingo
-// @updateURL  https://github.com/killkeeper/duolingo-minidict/blob/master/Duolingo-MiniDict.user.js
+// @updateURL  https://raw.githubusercontent.com/killkeeper/duolingo-minidict/master/Duolingo-MiniDict.user.js
 // @match      *://www.duolingo.com/*
 // @grant      none
 // ==/UserScript==
