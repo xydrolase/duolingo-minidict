@@ -3,6 +3,7 @@
 // @namespace  http://github.com/killkeeper/duolingo-minidict
 // @version    0.11
 // @description  A built-in dictionary for Duolingo
+// @updateURL  https://github.com/killkeeper/duolingo-minidict/blob/master/Duolingo-MiniDict.user.js
 // @match      *://www.duolingo.com/*
 // @grant      none
 // ==/UserScript==
@@ -30,10 +31,7 @@
             sort_by: 'levdist', // levdist, strength, last_practiced
         }, settings);
         
-        this.local_storage = (typeof Storage == 'function');
-        console.log(this.local_storage);
         this.data_pending = true;
-        this.last_updated = {};
         
         this.duo_apis = {
             'hints': [window.location.protocol, 
@@ -264,7 +262,6 @@
             });
             
             query.filters = filters;
-            console.log(query);
             
             return query;
         }
@@ -305,7 +302,6 @@
             
             var ajax_callback = (function($callback, $tokens) {
                 return function(data) {
-                    console.log(data);
                     $.each(data, function(w, hints){
                         if ($tokens[w] != undefined) {
                             $.extend($tokens[w], {hints: hints});
@@ -347,7 +343,6 @@
 		 * */
         $.getScript("https://brianreavis.github.io/selectize.js/js/selectize.js",
                     function() {
-                        console.log("Loaded!");
                         var dmDict = new DMDict();
                         dmDict.initialize();
                         
