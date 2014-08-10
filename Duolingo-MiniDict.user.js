@@ -1,21 +1,35 @@
 // ==UserScript==
 // @name       Duolingo-MiniDict
-// @namespace  http://github.com/killkeeper/duolingo-minidict
+// @namespace  https://github.com/killkeeper/duolingo-minidict
 // @version    0.1
 // @description  A built-in dictionary for Duolingo
 // @resource css https://brianreavis.github.io/selectize.js/css/selectize.default.css
 // @match      https://www.duolingo.com/*
 // @grant      none
 // ==/UserScript==
+//
+
+/** 
+ * Duoling-MiniDict
+ *
+ * A GreaseMonkey / TamperMonkey user script that injects a vocabulary
+ * searching tool into Duolingo's top navigation bar.
+ *
+ * */
 
 (function($) {
     function DMDict(settings) {
         this.vocab_list = {};
+        this.el = null;
+        this.$el = null;
+        this.selectize_api = null;
         
         this.opts = $.extend({
             update_freq: 3600 * 3, // 3 hours
             force_update: false,
             datatableify: false,
+            max_options: 15,
+            sort_by: 'levdist', // levdist, strength, last_practiced
         }, settings);
         
         this.local_storage = (typeof Storage == 'function');
@@ -23,9 +37,14 @@
         this.data_pending = false;
         this.last_updated = {};
         
+        this.duo_apis = {
+            'hints': [window.location.protocol, 
+                      "//d.duolingo.com/words/hints"].join("/")
+        };
+        
+        
+        // http://stackoverflow.com/questions/11919065/sort-an-array-by-the-levenshtein-distance-with-best-performance-in-javascript
         this.lev_distance = function(s, t) {
-            // http://stackoverflow.com/questions/11919065/sort-an-array-by-the-levenshtein-distance-with-best-performance-in-javascript
-            
             var d = []; //2d matrix
             
             // Step 1
@@ -83,16 +102,19 @@
             this.dict_lang = this.learning_language + "/" + this.from_language;
             
             this.check_vocab_list_updates();
+            this.init_dom();
         }
         
         this.check_vocab_list_updates = function() {
+            /* To throttle API requests, the user's words are cached in via
+			 * HTML5's localStorage object. By default the cache is good for 
+			 * 3 hours until the settings suggest another value otherwise. */
+            
             console.log("local_storage:", this.local_storage);
             if (this.local_storage) {
                 $.extend(this.last_updated,
                          JSON.parse(localStorage.getItem('dmdict-last-updated')) || {});
                 var dict_last_updated = this.last_updated[this.dict_lang] || 0;
-                
-                console.log(this.last_updated);
                 
                 var secs_elapsed = (new Date() - new Date(dict_last_updated)) / 1000;
                 console.log('Dictionary ' + this.dict_lang + ' updated ' + 
@@ -116,6 +138,107 @@
             }
         }
         
+        this.init_dom = function() {
+            
+            $("ul.topbar-nav-main").append('<li><a id="duo-minidict" href="javascript:void(0);">' +
+                                           '<span class="icon icon-search-gray"></span><small>Mdict</small></a></li>');
+            $("ul.topbar-nav-main").append('<div class="popover" role="tooltip" style="display: none; overflow-y: visible; width: 512px;" id="duo-selectize-container">' + 
+                                           '<h6 class="popover-title">MiniDict - Type to search:</h6>' +
+                                           '<div class="popover-content" id="md-selectize">' +
+                                           '<select id="select-word" class="wordlist" placeholder="Search for a word..."></select>' +
+                                           '</div></div>');
+            
+            this.$el = $("#duo-selectize-container");
+            this.el = this.$el.get(0);
+            
+            $('<link rel="stylesheet" href="https://brianreavis.github.io/selectize.js/css/selectize.default.css" />').appendTo('head');
+            $('<style type="text/css">' +
+              '.popover { overflow: visible !important; width: 512px; position: absolute; }' +
+              '.popover-title { margin-left: 5px; }' +
+              '.selectize-control.wordlist .selectize-dropdown > div {' +
+              ' border-bottom: 1px solid rgba(0,0,0,0.05); }' + 
+              '.selectize-control.wordlist .selectize-dropdown .word {' +
+              ' font-weight: bold; margin-right: 5px; }' +
+              '.selectize-control.wordlist .selectize-dropdown .attrs {' + 
+              ' font-size: 11px; opacity: 0.8; }' +
+              '.selectize-control.wordlist .selectize-dropdown .title {' +
+              ' display: block; }' +
+              '.selectize-control.wordlist .selectize-dropdown .hints {' +
+              ' font-size: 12px; display: block; color: #a0a0a0; ' +
+              ' white-space: nowrap; width: 100%; text-overflow: ellipsis;' +
+              ' overflow: hidden; }' + 
+              '.selectize-control.wordlist .selectize-dropdown .meta {' +
+              ' list-style: none; margin: 0; padding: 0; font-size: 10px; }' +
+              '.selectize-control.wordlist .selectize-dropdown .meta li {' +
+              ' margin: 0; padding: 0; display: inline; margin-right: 10px; ' +
+              ' color: #9f9f9f; }' +
+              '.selectize-control.wordlist .selectize-dropdown .meta li span {' +
+              ' font-weight: bold; }</style>'
+             ).appendTo('head');
+            
+            var load_callback = (function(self) {
+                return function(query_str, callback) {
+                    if (!query_str.length) return callback();
+                    
+                    var query = self.build_query(query_str);
+                    self.query(self.dict_lang, query, callback);
+                }
+            })(this);
+            
+            $('#select-word').selectize({
+                valueField: 'word_string',
+                labelField: 'word_string',
+                searchField: 'word_string',
+                loadThrottle: 500,
+                maxOptions: 10,
+                options: [],
+                create: false,
+                render: {
+                    option: function(item, escape) {
+                        return '<div><span class="title"><span class="word">' + 
+                            escape(item.word_string) + '</span><span class="attrs">' + 
+                            escape(item.pos) + 
+                            (item.gender ? " (" + item.gender.substr(0, 1).toLowerCase() + ".)" : "") +
+                            (item.infinitive ? " (inf: " + item.infinitive + ")" : "") +
+                            '</span></span><span class="hints">' + 
+                            escape(item.hints.slice(0, 10).join(", ")) + 
+                            '</span><ul class="meta">' + 
+                            '<li>Skill: <span>' + escape(item.skill) + '</span></li>' +
+                            '</ul></div>';
+                    }
+                },
+                load: load_callback
+            });
+            
+            this.selectize_api = $("#select-word")[0].selectize;
+            
+            $('#duo-minidict').on("click", (function($el, $api) {
+                return function() {
+                    var p = $(this).position();
+                    var h = $(this).height();
+                    $el.toggle().css({
+                        'top': p.top + h + 24,
+                        'left': p.left - 224
+                    });
+                    if ($el.is(":visible")) {
+                        /* to allow prompt input */
+                        $api.focus();
+                    }
+                };
+            })(this.$el, this.selectize_api));
+            
+            
+            this.$el.find('input[type="text"]').blur((function($el) {
+                return function() {
+                    if ($el.is(":visible")) {
+                        $el.fadeOut();
+                    }
+                };
+            })(this.$el));
+            
+            
+        }
+        
         this.fetch_vocab_list = function() {
             this.data_pending = true;
             
@@ -132,16 +255,99 @@
             });
         }
         
-        this.query = function(lang, query) {
-        	if (this.vocab_list[lang] == undefined) return [];
-            var regex = new RegExp(query);
+        this.build_query = function(search) {
+            /* builds a query object that can contain multiple filters. 
+			 * (type, skill, gender etc.).
+			 *
+			 * The syntax is [filter:]keyword,
+			 * for instance, gender:M, skill:Infinitive etc.
+			 *
+			 * If multiple plain keywords (i.e. without filters) are specified,
+			 * only the first one is taken, since it doesn't make too much
+			 * sense to search for multiple words.
+			 *
+			 * Filters are applied by logical AND (not logical OR).
+			 */
+            var query = {
+                keyword: null,
+                filters: []
+            }, filters = {};
             
-            var wl = $.grep(this.vocab_list[lang].words, function(w, i) {
-            	return regex.test(w.word_string);
+            var filter_regexp = /(([a-zA-Z-_])+:)?(\S+)/g;
+            $.map(search.match(filter_regexp), function(d, i) {
+                if (d.indexOf(":") != -1) {
+                    var _f = d.split(":");
+                    filters[_f[0]] = _f[1];
+                }
+                else {
+                    query.keyword = query.keyword || d;
+                }
             });
             
-            return wl;
-            //return {'wordlist': wl};    
+            query.filters = filters;
+            console.log(query);
+            
+            return query;
+        }
+        
+        this.query = function(lang, query, callback) {
+            /* */
+            console.log("Query:", lang, this.vocab_list[lang], query, callback);
+            if (this.vocab_list[lang] == undefined) return callback();
+            var regex = new RegExp(query.keyword);
+            
+            var wl = $.grep(this.vocab_list[lang].words, function(w, i) {
+                return regex.test(w.word_string);
+            });
+            
+            /* sort the word list */
+            if (this.opts.sort_by == "levdist") {
+                var self = this;
+                wl = _.sortBy(wl, function(w) {
+                    return self.lev_distance(query.keyword, w.word_string);
+                });
+            }
+            
+            $.map(query.filters, function(f, i) {
+                var regex = new RegExp(f);
+                wl = _.filter(wl, function(w) {
+                    // invalid filter, skip
+                    if (w[f] == undefined) return true; 
+                    return regex.test(w[f]);
+                });
+            });
+            
+            /* well, nothing qualifies */
+            if (wl.length == 0) return callback();
+            
+            var tokens = {};
+            $.each(wl.slice(0, this.opts.max_options), function(i, w) {
+                tokens[w.word_string] = w;
+            });
+            
+            var ajax_callback = (function($callback, $tokens) {
+                return function(data) {
+                    console.log(data);
+                    $.each(data, function(w, hints){
+                        if ($tokens[w] != undefined) {
+                            $.extend($tokens[w], {hints: hints});
+                        }
+                    });
+                    
+                    $callback(_.values($tokens));
+                }
+            })(callback, tokens);
+            
+            /* fetch word hints (explanations) */
+            $.ajax({
+                url: this.duo_apis['hints'] + '/' + this.dict_lang,
+                data: {
+                    tokens: JSON.stringify(_.keys(tokens))
+                },
+                success: ajax_callback,
+                type: 'GET',
+                dataType: 'jsonp'
+            });
         }
         
         this.parse_vocab_list = function(vlist) {
@@ -181,70 +387,14 @@
     };
     
     $(document).ready(function() {
-        console.log("duo minidictloaded");
-        $("ul.topbar-nav-main").append('<li><a id="duo-minidict" href="#"><small>MDict</small></a></li>');
-        $("ul.topbar-nav-main").append('<div class="popover" role="tooltip" style="display: none; overflow-y: visible; width: 256px;" id="duo-selectize-container">' + 
-                                       '<h6 class="popover-title">MiniDict - Type to search:</h6>' +
-                                       '<div class="popover-content" id="md-selectize">' +
-                                       '<select id="select-word" placeholder="Search for a word..."></select>' +
-                                       '</div></div>');
         
-        $('#duo-minidict').on("click", function() {
-            var p = $(this).position();
-            console.log(p);
-            var h = $(this).height();
-            $("#duo-selectize-container").toggle()
-            .css({'overflow': 'visible', 
-                  'top': p.top + h + 24,
-                  'left': p.left - 96,
-                  'position': 'absolute'});
-            
-        });
-        
-        $('<link rel="stylesheet" href="https://brianreavis.github.io/selectize.js/css/selectize.default.css" />').appendTo('head');
-        $('<style type="text/css">' +
-          '.popover { overflow: visible !important; width: 256px; position: absolute; }' +
-          '.popover-title { margin-left: 5px; }</style>').appendTo('head');
-        
+        /* load selectize, which is used for the enhanced search functionality.
+		 * */
         $.getScript("https://brianreavis.github.io/selectize.js/js/selectize.js",
                     function() {
                         console.log("Loaded!");
                         var dmDict = new DMDict();
                         dmDict.initialize();
-                        
-                        $('#select-word').selectize({
-                            theme: 'wordlist',
-                            valueField: 'word_string',
-                            labelField: 'word_string',
-                            searchField: 'word_string',
-                            loadThrottle: 500,
-                            maxOptions: 10,
-                            options: [],
-                            create: false,
-                            render: {
-                                option: function(item, escape) {
-                                    console.log(item);
-                                    return '<div><strong>' + escape(item.word_string) + '</strong><br /><em>' + item.pos + '</em></div>';
-                                }
-                            },
-                            load: function(query, callback) {
-                                if (!query.length) return callback();
-                                
-                                var dict_lang = duo.user.get('learning_language') + '/' +
-                                    duo.user.get('ui_language');
-                                
-                                /* in target language */
-                                var foreign_words = dmDict.query(dict_lang, query);
-                                console.log(foreign_words);
-                                if (foreign_words.length > 0) {
-                                	callback(foreign_words.slice(0, 25));
-                                }
-                                else {
-                                	callback();
-                                }
-                                
-                            }
-                        });
                         
                     });
     });
