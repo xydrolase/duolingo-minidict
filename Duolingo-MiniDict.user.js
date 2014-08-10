@@ -341,7 +341,7 @@
         
         /* load selectize, which is used for the enhanced search functionality.
 		 * */
-        $.getScript("https://raw.githubusercontent.com/brianreavis/selectize.js/f293d8b3100db2cc339d4b78ac3c9d0da53d431c/dist/js/selectize.js",
+        $.getScript("https://brianreavis.github.io/selectize.js/js/selectize.js",
                     function() {
                         var dmDict = new DMDict();
                         dmDict.initialize();
