@@ -28,6 +28,10 @@
         this.opts = $.extend({
             datatableify: false,
             max_options: 15,
+            debounce_wait: 1000,
+            // if only uses a filter, allow to show more
+            // (e.g. list all words belonging to a skill).
+            max_options_filter_only: 50,
             sort_by: 'levdist', // levdist, strength, last_practiced
         }, settings);
         
@@ -99,17 +103,19 @@
         this.init_dom = function() {
             
             $("ul.topbar-nav-main").append('<li><a id="duo-minidict" href="javascript:void(0);">' +
-                                           '<span class="icon icon-search-gray"></span><small>Mdict</small></a></li>');
+                                           '<span class="icon icon-search-gray"></span></a></li>');
             $("ul.topbar-nav-main").append('<div class="popover" role="tooltip" style="display: none; overflow-y: visible; width: 512px;" id="duo-selectize-container">' + 
                                            '<h6 class="popover-title">MiniDict - Type to search:</h6>' +
                                            '<div class="popover-content" id="md-selectize">' +
                                            '<select id="select-word" class="wordlist" placeholder="Search for a word..."></select>' +
                                            '</div></div>');
             
+            $("ul.topbar-nav-main li").css("font-size", "13px");
+            
             this.$el = $("#duo-selectize-container");
             this.el = this.$el.get(0);
             
-            $('<link rel="stylesheet" href="https://brianreavis.github.io/selectize.js/css/selectize.default.css" />').appendTo('head');
+            $('<link rel="stylesheet" href="https://cdn.rawgit.com/brianreavis/selectize.js/f293d8b3100db2cc339d4b78ac3c9d0da53d431c/dist/css/selectize.default.css" />').appendTo('head');
             $('<style type="text/css">' +
               '.popover { overflow: visible !important; width: 512px; position: absolute; }' +
               '.popover-title { margin-left: 5px; }' +
@@ -146,11 +152,17 @@
             $('#select-word').selectize({
                 valueField: 'id',  // unique id for lexeme
                 labelField: 'word_string',
-                searchField: 'word_string',
-                loadThrottle: 500,
+                // there are also keys allowable when searched with filter syntax
+                searchField: ['word_string', 'pos', 'skill', 'gender', 'infinitive'],
+                loadThrottle: this.opts.debounce_wait,
                 maxOptions: 10,
                 options: [],
                 create: false,
+                score: function(search) {
+                    // a customiezd score function that will strip the filter "key:" prefix
+                    var striped_search = search.replace(/[a-zA-Z-_]+:/g, "");
+                    return this.getScoreFunction(striped_search);
+                },
                 render: {
                     option: function(item, escape) {
                         return '<div><span class="title"><span class="word">' + 
@@ -169,6 +181,12 @@
             });
             
             this.selectize_api = $("#select-word")[0].selectize;
+            
+            /* wrap the vanilla selectize.search function */
+            this.selectize_api.search_vanilla = this.selectize_api.search;
+            this.selectize_api.search = function(query) {
+            	return this.search_vanilla(query.replace(/[a-zA-Z-_]+:/g, ""));
+            }
             
             var item_add_callback = (function(self) {
                 return function(value, $item) {
@@ -271,43 +289,61 @@
             if (this.data_pending || !this.vocab_list) return callback();
             var regex = new RegExp(query.keyword);
             
-            var wl = $.grep(this.vocab_list, function(w, i) {
-                return regex.test(w.word_string);
-            });
+            if ((query.keyword == null || query.keyword == "") &&
+                _.keys(query.filters).length == 0) return callback();
             
-            /* sort the word list */
-            if (this.opts.sort_by == "levdist") {
-                var self = this;
-                wl = _.sortBy(wl, function(w) {
-                    return self.lev_distance(query.keyword, w.word_string);
+            var wl = null;
+            if (query.keyword) {
+                wl = $.grep(this.vocab_list, function(w, i) {
+                    return regex.test(w.word_string);
                 });
+                
+                /* sort the word list */
+                if (this.opts.sort_by == "levdist") {
+                    var self = this;
+                    wl = _.sortBy(wl, function(w) {
+                        return self.lev_distance(query.keyword, w.word_string);
+                    });
+                }
+            }
+            else {
+                wl = this.vocab_list;
             }
             
-            $.map(query.filters, function(f, i) {
-                var regex = new RegExp(f);
+            $.map(query.filters, function(val, key) {
+                console.log("Filtering key: " + key + " matching: " + val);
+                var regex = new RegExp(val, "i");
+                console.log(regex);
                 wl = _.filter(wl, function(w) {
                     // invalid filter, skip
-                    if (w[f] == undefined) return true; 
-                    return regex.test(w[f]);
+                    if (w[key] == undefined) return true; 
+                    console.log(w[key]);
+                    console.log(regex.test(w[key]));
+                    return regex.test(w[key]);
                 });
+                
             });
             
             /* well, nothing qualifies */
             if (wl.length == 0) return callback();
-            
+             
+            var nmax = query.keyword ? this.opts.max_options :
+            	this.opts.max_options_filter_only;
             var tokens = {};
-            $.each(wl.slice(0, this.opts.max_options), function(i, w) {
+            $.each(wl.slice(0, nmax), function(i, w) {
                 tokens[w.word_string] = w;
             });
             
             var ajax_callback = (function($callback, $tokens) {
                 return function(data) {
+                    console.log(data);
                     $.each(data, function(w, hints){
                         if ($tokens[w] != undefined) {
                             $.extend($tokens[w], {hints: hints});
                         }
                     });
                     
+                    console.log("$tokens:", $tokens);
                     $callback(_.values($tokens));
                 }
             })(callback, tokens);
@@ -341,7 +377,7 @@
         
         /* load selectize, which is used for the enhanced search functionality.
 		 * */
-        $.getScript("https://brianreavis.github.io/selectize.js/js/selectize.js",
+        $.getScript("https://cdn.rawgit.com/brianreavis/selectize.js/f293d8b3100db2cc339d4b78ac3c9d0da53d431c/dist/js/standalone/selectize.min.js",
                     function() {
                         var dmDict = new DMDict();
                         dmDict.initialize();
