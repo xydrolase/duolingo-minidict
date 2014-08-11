@@ -302,14 +302,17 @@
                 }
             })(this.$el));
             
-            $("body").keydown(function(e) {
-                if (e.keyCode == 191 ||
+			$("body").keydown(function(e) {
+				if (e.keyCode == 191 || 
 					(e.altKey == true && e.keyCode == 76)) {
-                    $("#duo-minidict").trigger("click");
-					return false;
-                }
-            });
-            
+					var cur_focus = $(':focus').length > 0 ? $(':focus') : null;
+					if (!(cur_focus && (cur_focus.is('input') || 
+								cur_focus.is('textarea')))) {
+						$("#duo-minidict").trigger("click");
+						return false;
+					}
+				}
+			});
         }
         
         this.fetch_vocab_list = function() {
