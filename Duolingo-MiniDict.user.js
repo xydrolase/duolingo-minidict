@@ -297,13 +297,16 @@
                 return function(e) {
                     if (e.keyCode == 27) {
                         $el.fadeOut();
+						return false;
                     }
                 }
             })(this.$el));
             
             $("body").keydown(function(e) {
-                if (e.altKey == true && e.keyCode == 76) {
+                if (e.keyCode == 191 ||
+					(e.altKey == true && e.keyCode == 76)) {
                     $("#duo-minidict").trigger("click");
+					return false;
                 }
             });
             
